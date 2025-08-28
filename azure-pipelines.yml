@@ -1,0 +1,102 @@
+# azure-pipelines.yml
+trigger:
+  branches:
+    include:
+      - main
+
+name: $(Date:yyyyMMdd).$(Rev:r)
+
+# <<< keep your self-hosted pool >>>
+pool:
+  name: SandboxBuild   # change only if you want a different pool
+
+variables:
+  # --- UiPath/pack variables ---
+  PackageVersion: '1.0.$(Build.BuildId)'
+  ProjectPath: '$(Build.SourcesDirectory)'            # repo root; adjust to your UiPath project folder
+  OutputDir: '$(Build.ArtifactStagingDirectory)\packages'
+
+  # --- Orchestrator/API (if you later deploy or manage assets) ---
+  OrchestratorUrl: ''          # e.g. https://cloud.uipath.com/orgName/tenantName/
+  TenantName: ''               # e.g. DefaultTenant
+  FolderPath: ''               # e.g. Shared
+  # Store secrets in Pipeline variables as secrets:
+  # UIPATH_CLIENT_ID, UIPATH_CLIENT_SECRET
+
+stages:
+- stage: CI
+  displayName: Build & Pack UiPath
+  jobs:
+  - job: Pack
+    displayName: Pack UiPath Project
+    steps:
+
+    # (Optional) Your custom PowerShell — corresponds to the disabled "PowerShell Script" in UI
+    - pwsh: |
+        Write-Host "Hello from custom script step"
+      displayName: 'PowerShell Script (custom)'
+
+    # Install UiPath CLI locally (no marketplace task, no agent demands)
+    # The CLI is a .NET global tool; this does not update the agent.
+    - pwsh: |
+        $ErrorActionPreference = 'Stop'
+        # Ensure dotnet is available on the agent box. If you don't have it, install once on that machine.
+        dotnet --info | Out-Null
+
+        # Install if not already installed
+        $exists = (& dotnet tool list -g) -match '^uipcli\s'
+        if (-not $exists) {
+          dotnet tool install --global UiPath.CLI
+        } else {
+          Write-Host "uipcli already installed."
+        }
+
+        $env:PATH = "$env:PATH;$([Environment]::GetFolderPath('UserProfile'))\.dotnet\tools"
+        uipcli --help
+      displayName: 'Install UiPath CLI (uipcli)'
+
+    # Pack the UiPath project (equivalent to "UiPath Pack" task)
+    - pwsh: |
+        $ErrorActionPreference = 'Stop'
+        $proj = "$(ProjectPath)"
+        $out  = "$(OutputDir)"
+        New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+        # If your UiPath project lives in a subfolder (where project.json is), set ProjectPath accordingly.
+        # uipcli automatically finds project.json; otherwise, add: --project "$proj\project.json"
+        uipcli package pack `
+          --project "$proj" `
+          --output "$out" `
+          --version "$(PackageVersion)" `
+          --autoVersionPatch
+
+        Write-Host "Packages produced:"
+        Get-ChildItem -Recurse -Path $out -Filter *.nupkg | ForEach-Object { Write-Host " - $($_.FullName)" }
+      displayName: 'UiPath Pack (CLI)'
+
+    # (Optional) Manage Assets via API/CLI (replacement for "UiPath Manage Assets" task)
+    # Toggle with variable DisableManageAssets=true if you want it off.
+    - pwsh: |
+        if ("$(DisableManageAssets)" -eq "true") {
+          Write-Host "Skipping asset management (DisableManageAssets=true)."
+          exit 0
+        }
+
+        $ErrorActionPreference = 'Stop'
+        $env:PATH = "$env:PATH;$([Environment]::GetFolderPath('UserProfile'))\.dotnet\tools"
+
+        # Example placeholder – customize to your asset operations.
+        # uipcli orchestrator assets list --url "$(OrchestratorUrl)" --tenant "$(TenantName)" --folder "$(FolderPath)" `
+        #   --clientId "$(UIPATH_CLIENT_ID)" --clientSecret "$(UIPATH_CLIENT_SECRET)"
+
+        Write-Host "Add your asset operations here (list/add/update)."
+      displayName: 'UiPath Manage Assets (CLI)'
+      condition: succeeded()
+
+    # Publish artifacts (equivalent to "Publish Artifact: drop")
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifact: drop'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'
