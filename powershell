@@ -1,0 +1,50 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  name: SandboxBuild   # adjust to your agent pool
+
+variables:
+- group: UiPath_Dev
+- name: ProjectJson
+  value: '$(Build.SourcesDirectory)\project.json'
+- name: OutputDir
+  value: '$(Build.SourcesDirectory)\output'
+- name: PackagePattern
+  value: '*.nupkg'
+
+steps:
+# PACK
+- task: PowerShell@2
+  displayName: "UiPath: Pack project"
+  inputs:
+    targetType: 'inline'
+    script: |
+      uipcli.exe package pack "$(ProjectJson)" --output "$(OutputDir)"
+
+# FIND PACKAGE
+- task: PowerShell@2
+  displayName: "Find latest .nupkg"
+  inputs:
+    targetType: 'inline'
+    script: |
+      $pkg = Get-ChildItem -Path "$(OutputDir)" -Filter "$(PackagePattern)" -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+      if (-not $pkg) { throw "No package found under $(OutputDir)" }
+      Write-Host "##vso[task.setvariable variable=BuiltPackagePath]$($pkg.FullName)"
+      Write-Host "Package ready: $($pkg.Name)"
+
+# DEPLOY
+- task: PowerShell@2
+  displayName: "UiPath: Deploy package"
+  inputs:
+    targetType: 'inline'
+    script: |
+      uipcli.exe package deploy "$(BuiltPackagePath)" `
+        --hostURL    "$(UIP_HOST_URL)" `
+        --username   "$(UIP_USERNAME)" `
+        --password   "$(UIP_PASSWORD)" `
+        --tenant     "$(UIP_TENANT)" `
+        --environment "$(UIP_ENVIRONMENT)" `
+        --folder      "$(UIP_FOLDER)"
